@@ -1,0 +1,192 @@
+// backend/prisma/schema.prisma
+
+// Définit le générateur de client Prisma (pour Node.js)
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Définit la source de données (notre base PostgreSQL)
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // Utilise l'URL du fichier .env
+}
+
+// --- Énumérations (Types prédéfinis) ---
+
+// Types de matériel possibles
+enum EquipmentType {
+  CAMERA_BODY // Boîtier appareil photo
+  LENS        // Objectif
+  FLASH       // Flash
+  MOTOR       // Moteur d'entraînement
+  ACCESSORY   // Accessoire divers
+}
+
+// Types de valeurs possibles pour les spécifications
+enum SpecValueType {
+  STRING    // Texte libre (ex: "1s-1/1000s, B")
+  INT       // Nombre entier (ex: 500 pour le poids en g)
+  FLOAT     // Nombre décimal (ex: 1.4 pour l'ouverture)
+  BOOLEAN   // Vrai/Faux (ex: Autofocus)
+  ENUM_LIST // Une valeur choisie dans une liste prédéfinie (non implémenté ici, pour plus tard)
+}
+
+// --- Modèles (Tables de la base de données) ---
+
+// Modèle pour les Marques
+model Brand {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique // Nom unique de la marque
+  countryOfOrigin String?  // Pays d'origine (optionnel)
+  logoUrl   String?  // URL du logo (optionnel)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation inverse: Une marque peut avoir plusieurs matériels
+  equipments Equipment[]
+}
+
+// Modèle pour les Montures (Objectifs/Boîtiers)
+model Mount {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique // Nom unique de la monture (ex: "Nikon F")
+  type      String?  // Type de monture (ex: "Baïonnette")
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation inverse: Une monture peut être utilisée par plusieurs matériels
+  equipments Equipment[]
+}
+
+// Modèle principal pour tout type de Matériel
+model Equipment {
+  id        Int      @id @default(autoincrement())
+
+  // Relation avec la marque (obligatoire)
+  brandId   Int
+  brand     Brand    @relation(fields: [brandId], references: [id])
+
+  baseModelName String   // Nom de base du modèle (ex: "F3")
+  versionIdentifier String? // Identifiant de version (ex: "HP", peut être null)
+
+  productionStartYear Int?
+  productionEndYear   Int?
+
+  equipmentType EquipmentType // Type de matériel (Boîtier, Objectif, etc.)
+
+  mainImageUrl String?
+  description  String? // Description texte libre
+
+  // Relation avec la monture (optionnelle, surtout pour Boîtiers/Objectifs)
+  mountId   Int?
+  mount     Mount?   @relation(fields: [mountId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation inverse: Un matériel a plusieurs valeurs de spécification
+  specifications SpecificationValue[]
+
+  // Relation Plusieurs-à-Plusieurs avec les Tags
+  // Prisma gère la table de jointure implicitement avec `_EquipmentTags`
+  tags Tag[] @relation("EquipmentTags")
+
+  // Relations futures (commentées pour l'instant)
+  // files File[]
+  // history ModificationHistory[]
+
+  // Index pour améliorer les performances de recherche
+  @@index([brandId])
+  @@index([mountId])
+  @@index([equipmentType])
+}
+
+// Modèle pour définir les types de Spécifications possibles
+model SpecificationDefinition {
+  id          Int      @id @default(autoincrement())
+  specKey     String   @unique // Clé technique unique (ex: "weight_g")
+  displayName String   // Nom affichable (ex: "Poids (g)")
+  unit        String?  // Unité (ex: "g", "mm")
+  valueType   SpecValueType // Type de valeur attendue (String, Int, Float...)
+  applicableTo EquipmentType[] // À quels types de matériel cette spec s'applique
+  description String?
+
+  createdAt DateTime @default(now()) // Date ajout definition
+  updatedAt DateTime @updatedAt // Date maj definition
+
+  // Relation inverse: Une définition est utilisée dans plusieurs valeurs
+  values      SpecificationValue[]
+}
+
+// Modèle pour stocker la valeur d'une Spécification pour un Matériel donné
+model SpecificationValue {
+  id        Int      @id @default(autoincrement())
+
+  // Relation avec le matériel concerné
+  equipmentId Int
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade) // Si on supprime le matériel, on supprime ses specs
+
+  // Relation avec la définition de la spécification
+  specDefinitionId Int
+  specDefinition   SpecificationDefinition @relation(fields: [specDefinitionId], references: [id])
+
+  // Champs pour stocker la valeur (un seul sera rempli)
+  stringValue  String?
+  intValue     Int?
+  floatValue   Float?
+  booleanValue Boolean?
+
+  createdAt DateTime @default(now()) // Date ajout valeur spec
+  updatedAt DateTime @updatedAt // Date maj valeur spec
+
+  // Assure qu'on ne peut pas avoir la même spec définie deux fois pour le même matériel
+  @@unique([equipmentId, specDefinitionId])
+
+  // Index pour la performance
+  @@index([equipmentId])
+  @@index([specDefinitionId])
+}
+
+// Modèle pour les Tags/Étiquettes
+model Tag {
+  id   Int    @id @default(autoincrement())
+  name String @unique // Nom unique du tag
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation Plusieurs-à-Plusieurs avec Equipment
+  equipments Equipment[] @relation("EquipmentTags")
+}
+
+// Modèles futurs (commentés pour l'instant)
+/*
+model User {
+  id Int @id @default(autoincrement())
+  // ... autres champs ...
+  // filesUploaded File[]
+  // modifications ModificationHistory[]
+}
+
+model File {
+  id Int @id @default(autoincrement())
+  // ... autres champs ...
+  equipmentId Int
+  equipment Equipment @relation(fields: [equipmentId], references: [id])
+  uploaderUserId Int
+  uploader User @relation(fields: [uploaderUserId], references: [id])
+}
+
+// Pourrait être utilisé pour l'historique des modifications
+model ModificationHistory {
+  id Int @id @default(autoincrement())
+  // ... détails de la modif, ancien/nouveau contenu, timestamp, userId ...
+  // equipmentId Int?
+  // equipment Equipment? @relation(fields: [equipmentId], references: [id])
+  // userId Int
+  // user User @relation(fields: [userId], references: [id])
+}
+*/
