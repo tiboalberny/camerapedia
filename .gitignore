@@ -1,0 +1,14 @@
+# Fichiers de dépendances Node
+node_modules
+
+# Fichier d'environnement (contient des secrets potentiels)
+.env
+
+# Dossiers de build ou de logs (si applicable plus tard)
+dist
+logs
+*.log
+
+# Fichiers système
+.DS_Store
+Thumbs.db

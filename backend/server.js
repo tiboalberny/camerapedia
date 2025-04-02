@@ -1,10 +1,17 @@
 // backend/server.js
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
+const cors = require('cors');
 
 const prisma = new PrismaClient();
 const app = express();
 const port = process.env.PORT || 3001; // Utilise le port défini par l'environnement ou 3001
+
+// --- Middlewares ---
+// Utiliser cors AVANT vos routes API
+app.use(cors()); // <<< Utiliser cors() - par défaut autorise toutes les origines
+app.use(express.json());
+// -----------------
 
 app.use(express.json()); // Crucial pour pouvoir lire req.body dans les requêtes POST/PUT
 
