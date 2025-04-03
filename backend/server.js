@@ -377,7 +377,132 @@ app.get('/api/equipment/:id', async (req, res) => {
     res.status(500).json({ error: "Une erreur est survenue lors de la récupération du matériel." });
   }
 });
+// --- Specification Values API Routes (Nested under Equipment) ---
+// POST /api/equipment/:equipmentId/specifications - Ajouter une valeur de spécification
+app.post('/api/equipment/:equipmentId/specifications', async (req, res) => {
+  const { equipmentId } = req.params; // Récupère l'ID du matériel depuis l'URL
+  const { specDefinitionId, value } = req.body; // Récupère l'ID de la définition et la valeur depuis le corps JSON
 
+  try {
+    const eqId = parseInt(equipmentId);
+    const specDefId = parseInt(specDefinitionId);
+
+    // --- Validations ---
+    if (isNaN(eqId) || isNaN(specDefId)) {
+      return res.status(400).json({ error: "Les ID de matériel et de définition de spécification doivent être des nombres valides." });
+    }
+    if (value === undefined || value === null || value === '') {
+        // Gérer le cas où 'value' est explicitement false pour un BOOLEAN
+        if (typeof value !== 'boolean' && value !== 0) {
+             return res.status(400).json({ error: "La valeur de la spécification ('value') est requise." });
+        }
+    }
+
+
+    // 1. Vérifier que le matériel et la définition existent
+    const [equipment, specDefinition] = await Promise.all([
+      prisma.equipment.findUnique({ where: { id: eqId } }),
+      prisma.specificationDefinition.findUnique({ where: { id: specDefId } })
+    ]);
+
+    if (!equipment) {
+      return res.status(404).json({ error: `Matériel avec l'ID ${eqId} non trouvé.` });
+    }
+    if (!specDefinition) {
+      return res.status(404).json({ error: `Définition de spécification avec l'ID ${specDefId} non trouvée.` });
+    }
+
+    // 2. Vérifier si la spec est applicable à ce type de matériel (optionnel mais recommandé)
+    if (!specDefinition.applicableTo.includes(equipment.equipmentType)) {
+         return res.status(400).json({ error: `La spécification '${specDefinition.displayName}' n'est pas applicable au type de matériel '${equipment.equipmentType}'.` });
+    }
+
+    // 3. Préparer l'objet de données pour Prisma en fonction du valueType attendu
+    let dataValue = {};
+    switch (specDefinition.valueType) {
+      case 'STRING':
+        if (typeof value !== 'string') return res.status(400).json({ error: `La valeur doit être une chaîne de caractères (String) pour '${specDefinition.displayName}'.` });
+        dataValue.stringValue = value;
+        break;
+      case 'INT':
+        const intValue = parseInt(value);
+        if (isNaN(intValue)) return res.status(400).json({ error: `La valeur doit être un nombre entier (Int) pour '${specDefinition.displayName}'.` });
+        dataValue.intValue = intValue;
+        break;
+      case 'FLOAT':
+         const floatValue = parseFloat(value);
+        if (isNaN(floatValue)) return res.status(400).json({ error: `La valeur doit être un nombre décimal (Float) pour '${specDefinition.displayName}'.` });
+        dataValue.floatValue = floatValue;
+        break;
+      case 'BOOLEAN':
+        if (typeof value !== 'boolean') return res.status(400).json({ error: `La valeur doit être un booléen (true/false) pour '${specDefinition.displayName}'.` });
+        dataValue.booleanValue = value;
+        break;
+      default:
+        return res.status(500).json({ error: `Type de valeur inconnu: ${specDefinition.valueType}` });
+    }
+
+    // 4. Créer la SpecificationValue
+    const newSpecValue = await prisma.specificationValue.create({
+      data: {
+        equipmentId: eqId,
+        specDefinitionId: specDefId,
+        ...dataValue // Ajoute le bon champ de valeur (stringValue, intValue, etc.)
+      },
+      include: { // Inclure la définition dans la réponse pour contexte
+        specDefinition: true
+      }
+    });
+
+    res.status(201).json(newSpecValue); // Succès
+
+  } catch (error) {
+    // Gérer l'erreur si la spec existe déjà pour ce matériel (contrainte unique)
+    if (error.code === 'P2002') { // Vérifier si les champs correspondent bien à notre contrainte unique
+       // Le message d'erreur Prisma peut être cryptique, on renvoie un message plus clair
+        // Attention: P2002 peut être déclenché par d'autres contraintes uniques. Idéalement, vérifier error.meta.target
+       if (error.meta?.target?.includes('equipmentId') && error.meta?.target?.includes('specDefinitionId')) {
+          return res.status(409).json({ error: `Cette spécification existe déjà pour ce matériel.` });
+       }
+    }
+    console.error(`Erreur POST /api/equipment/${equipmentId}/specifications:`, error);
+    res.status(500).json({ error: 'Impossible d\'ajouter la spécification.' });
+  }
+});
+// DELETE /api/equipment/:equipmentId/specifications/:specValueId - Supprimer une valeur de spécification
+app.delete('/api/equipment/:equipmentId/specifications/:specValueId', async (req, res) => {
+  const { equipmentId, specValueId } = req.params; // Récupère les deux ID depuis l'URL
+
+  try {
+      const eqId = parseInt(equipmentId);
+      const specValId = parseInt(specValueId);
+
+      if (isNaN(eqId) || isNaN(specValId)) {
+          return res.status(400).json({ error: "Les ID de matériel et de valeur de spécification doivent être des nombres valides." });
+      }
+
+      // Essayer de supprimer directement. Prisma lèvera une erreur P2025 si l'enregistrement n'existe pas.
+      await prisma.specificationValue.delete({
+          where: {
+              id: specValId,
+              // On peut ajouter equipmentId ici pour s'assurer qu'on supprime bien
+              // une spec appartenant au bon matériel, mais `id` est déjà unique.
+              // equipmentId: eqId,
+           },
+      });
+
+      // Si la suppression réussit, renvoyer un statut 204 No Content (standard pour DELETE réussi)
+      res.status(204).send();
+
+  } catch (error) {
+       // Gérer l'erreur spécifique si Prisma n'a pas trouvé l'enregistrement à supprimer
+       if (error.code === 'P2025') {
+          return res.status(404).json({ error: `Valeur de spécification avec l'ID ${specValueId} non trouvée.` });
+       }
+      console.error(`Erreur DELETE /api/equipment/${equipmentId}/specifications/${specValueId}:`, error);
+      res.status(500).json({ error: 'Impossible de supprimer la spécification.' });
+  }
+});
 // Démarrage du serveur
 app.listen(port, () => {
   console.log(`Serveur API Camerapedia démarré sur http://localhost:${port}`);
